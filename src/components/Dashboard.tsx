@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { CreateRecordForm } from './CreateRecordForm';
 import {
   FileText,
   Search,
@@ -60,8 +61,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [stats, setStats] = useState<Stats>({ totalDocuments: 0, totalSizeBytes: 0, storageLimitBytes: 10737418240 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
-  useEffect(() => {
+  const fetchData = useCallback(() => {
+    setLoading(true);
     Promise.all([
       fetch('/api/documents').then(r => r.json()),
       fetch('/api/documents/stats').then(r => r.json()),
@@ -76,6 +79,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         setLoading(false);
       });
   }, []);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   const storagePercent = Math.round((stats.totalSizeBytes / stats.storageLimitBytes) * 100);
 
@@ -142,7 +147,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
             </button>
             <div className="h-8 w-px bg-border mx-2" />
-            <button className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all">
+            <button
+              onClick={() => setShowCreateForm(true)}
+              className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all">
               <Plus size={16} />
               <span>New Document</span>
             </button>
@@ -151,6 +158,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
 
         {/* Dashboard Content */}
         <div className="flex-1 overflow-y-auto p-8">
+          {showCreateForm && (
+            <CreateRecordForm
+              onClose={() => setShowCreateForm(false)}
+              onSuccess={() => { setShowCreateForm(false); fetchData(); }}
+            />
+          )}
+
           <div className="mb-8 flex justify-between items-end">
             <div>
               <h2 className="text-2xl font-bold text-primary">Overview</h2>
