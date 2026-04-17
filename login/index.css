@@ -1,0 +1,16 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bg: #F3F4F6;
+    --color-primary: #1e3a8a;
+    --color-primary-dark: #172554;
+    --color-text-main: #374151;
+    --color-text-muted: #6B7280;
+    --color-border: #E5E7EB;
+    --color-accent: #3B82F6;
+  }
+}

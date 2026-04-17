@@ -1,0 +1,16 @@
+# .NET
+bin/
+obj/
+*.user
+
+# Node
+node_modules/
+dist/
+login/node_modules/
+
+# Secrets - never commit these
+appsettings.Development.json
+
+# VS
+.vs/
+*.suo

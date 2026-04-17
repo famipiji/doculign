@@ -1,0 +1,21 @@
+
+services:
+  db:
+    image: mysql:8.0
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: P@ssw0rd123
+      MYSQL_DATABASE: dms_db
+    ports:
+      - "3307:3306"
+
+  api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:8080"
+    depends_on:
+      - db
+    environment:
+      ConnectionStrings__DefaultConnection: "Server=db;Database=dms_db;Uid=root;Pwd=P@ssw0rd;"
