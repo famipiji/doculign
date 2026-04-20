@@ -29,13 +29,21 @@ namespace DmsApi.Controllers
         private readonly AppDbContext _context;
         private readonly ElasticsearchClient _elastic;
         private readonly TextExtractionService _extractor;
+        private readonly IServiceScopeFactory _scopeFactory;
         private const string IndexName = "doculign_documents";
 
-        public DocumentsController(AppDbContext context, ElasticsearchClient elastic, TextExtractionService extractor)
+        // Seed progress state (process-wide)
+        private static volatile bool _seeding = false;
+        private static volatile int _seedProgress = 0;
+        private static volatile int _seedTarget = 0;
+        private static string _seedMessage = string.Empty;
+
+        public DocumentsController(AppDbContext context, ElasticsearchClient elastic, TextExtractionService extractor, IServiceScopeFactory scopeFactory)
         {
             _context = context;
             _elastic = elastic;
             _extractor = extractor;
+            _scopeFactory = scopeFactory;
         }
 
         private static string BuildContent(Document doc, string extractedText = "")
@@ -282,21 +290,162 @@ namespace DmsApi.Controllers
             }
         }
 
-        // Index all existing DB documents into Elasticsearch, re-extracting text from stored files
+        // Index all existing DB documents into Elasticsearch using bulk API
         [HttpPost("reindex")]
         public async Task<IActionResult> Reindex()
         {
-            var documents = await _context.Documents.ToListAsync();
-            foreach (var doc in documents)
-            {
-                var extractedText = string.Empty;
-                if (!string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath))
-                    extractedText = await _extractor.ExtractFromFileAsync(doc.FilePath);
+            const int dbPageSize = 1000;
+            const int esBulkSize = 500;
+            var indexed = 0;
+            var skip = 0;
 
-                await IndexDocument(doc, extractedText);
+            while (true)
+            {
+                var docs = await _context.Documents
+                    .OrderBy(d => d.Id)
+                    .Skip(skip)
+                    .Take(dbPageSize)
+                    .ToListAsync();
+
+                if (docs.Count == 0) break;
+
+                // Extract text from files that exist on disk
+                var models = new List<DocumentIndexModel>(docs.Count);
+                foreach (var doc in docs)
+                {
+                    var extractedText = string.Empty;
+                    if (!string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath))
+                        extractedText = await _extractor.ExtractFromFileAsync(doc.FilePath);
+                    models.Add(ToIndexModel(doc, extractedText));
+                }
+
+                // Bulk index into ES in sub-batches
+                for (int i = 0; i < models.Count; i += esBulkSize)
+                {
+                    var batch = models.Skip(i).Take(esBulkSize).ToList();
+                    await _elastic.BulkAsync(b => b
+                        .Index(IndexName)
+                        .IndexMany(batch, (op, m) => op.Id(m.Id.ToString()))
+                    );
+                }
+
+                indexed += docs.Count;
+                skip += dbPageSize;
+                if (docs.Count < dbPageSize) break;
             }
 
-            return Ok(new { indexed = documents.Count });
+            return Ok(new { indexed });
+        }
+
+        [HttpGet("seed-status")]
+        public IActionResult SeedStatus() =>
+            Ok(new
+            {
+                seeding = _seeding,
+                progress = _seedProgress,
+                total = _seedTarget,
+                percent = _seedTarget > 0 ? Math.Round((double)_seedProgress / _seedTarget * 100, 1) : 0.0,
+                message = _seedMessage
+            });
+
+        [HttpPost("seed")]
+        public IActionResult SeedDocuments([FromQuery] int count = 100_000)
+        {
+            if (_seeding)
+                return Conflict(new { message = "Seeding already running.", progress = _seedProgress, total = _seedTarget });
+
+            count = Math.Clamp(count, 1, 1_000_000);
+            _seedProgress = 0;
+            _seedTarget = count;
+            _seedMessage = "Starting...";
+            _seeding = true;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    db.ChangeTracker.AutoDetectChangesEnabled = false;
+
+                    var rng = new Random();
+                    const int batchSize = 1000;
+
+                    string[] recordTypes = ["Invoice", "Employee", "Resume", "ComplianceAudit", "General"];
+                    string[] fileTypes   = ["pdf", "docx", "xlsx", "png", "jpg", "txt"];
+                    string[] authors     = ["admin", "hr_manager", "finance_dept", "legal_team", "ops_team", "sarah_j", "john_d", "mike_r", "alice_w", "bob_k"];
+                    string[] departments = ["HR", "Finance", "Legal", "Operations", "Engineering", "Sales", "Marketing", "IT"];
+                    string[] statuses    = ["Active", "Archived", "Pending", "Draft", "Final", "Under Review"];
+                    string[] prefixes    = ["Q1", "Q2", "Q3", "Q4", "FY2023", "FY2024", "FY2025", "Annual", "Monthly", "Weekly", "Project_Alpha", "Project_Beta", "Phase1", "Phase2", "Rev"];
+                    string[] docWords    = ["Report", "Contract", "Agreement", "Invoice", "Proposal", "Summary", "Analysis", "Audit", "Plan", "Policy", "Handbook", "Manual", "Review", "Notice", "Assessment"];
+
+                    var now = DateTime.UtcNow;
+                    var inserted = 0;
+
+                    while (inserted < count)
+                    {
+                        var thisBatch = Math.Min(batchSize, count - inserted);
+                        var batch = new List<Document>(thisBatch);
+
+                        for (int i = 0; i < thisBatch; i++)
+                        {
+                            var rt = recordTypes[rng.Next(recordTypes.Length)];
+                            var ft = fileTypes[rng.Next(fileTypes.Length)];
+                            var dept = departments[rng.Next(departments.Length)];
+                            var status = statuses[rng.Next(statuses.Length)];
+                            var prefix = prefixes[rng.Next(prefixes.Length)];
+                            var word = docWords[rng.Next(docWords.Length)];
+                            var createdAt = now.AddDays(-rng.Next(730)).AddHours(-rng.Next(24));
+
+                            var metadata = rt switch
+                            {
+                                "Invoice"         => $@"{{""invoiceNumber"":""{dept}-{rng.Next(10000, 99999)}"",""amount"":""{rng.Next(100, 100000)}"",""status"":""{status}""}}",
+                                "Employee"        => $@"{{""department"":""{dept}"",""position"":""{word} Specialist"",""status"":""{status}""}}",
+                                "Resume"          => $@"{{""position"":""{word} Engineer"",""department"":""{dept}""}}",
+                                "ComplianceAudit" => $@"{{""auditType"":""{dept} Compliance"",""result"":""{status}"",""year"":""{2023 + rng.Next(3)}""}}",
+                                _                 => $@"{{""department"":""{dept}"",""status"":""{status}""}}",
+                            };
+
+                            batch.Add(new Document
+                            {
+                                Name         = $"{prefix}_{word}_{rng.Next(1000, 9999)}.{ft}",
+                                Author       = authors[rng.Next(authors.Length)],
+                                RecordType   = rt,
+                                FileType     = ft,
+                                FileSizeBytes = rng.NextInt64(10_000, 15_000_000),
+                                Metadata     = metadata,
+                                FilePath     = string.Empty,
+                                CreatedAt    = createdAt,
+                                UpdatedAt    = createdAt.AddDays(rng.Next(0, 30)),
+                            });
+                        }
+
+                        db.Documents.AddRange(batch);
+                        await db.SaveChangesAsync();
+                        db.ChangeTracker.Clear();
+
+                        inserted += thisBatch;
+                        _seedProgress = inserted;
+                        _seedMessage = $"Inserted {inserted:N0} / {count:N0}";
+                    }
+
+                    _seedMessage = $"Done — {inserted:N0} documents inserted. Run POST /api/documents/reindex to index in Elasticsearch.";
+                }
+                catch (Exception ex)
+                {
+                    _seedMessage = $"Error: {ex.Message}";
+                }
+                finally
+                {
+                    _seeding = false;
+                }
+            });
+
+            return Accepted(new
+            {
+                message = $"Seeding {count:N0} documents in background.",
+                statusUrl = "/api/documents/seed-status"
+            });
         }
     }
 }
