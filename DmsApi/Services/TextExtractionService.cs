@@ -12,8 +12,8 @@ namespace DmsApi.Services
         private readonly string _tessDataPath;
         private readonly ILogger<TextExtractionService> _logger;
 
-        // Minimum characters from PdfPig before we consider the PDF to have a real text layer
-        private const int MinTextLayerLength = 50;
+        // If PdfPig extracts zero characters, assume scanned PDF and fall back to OCR
+        private const int MinTextLayerLength = 0;
 
         public TextExtractionService(IConfiguration config, ILogger<TextExtractionService> logger)
         {
@@ -61,7 +61,7 @@ namespace DmsApi.Services
             }
 
             var textLayerContent = sb.ToString().Trim();
-            if (textLayerContent.Length >= MinTextLayerLength)
+            if (textLayerContent.Length > MinTextLayerLength)
                 return textLayerContent;
 
             // Step 2: scanned/image PDF — render each page to image and OCR
@@ -101,6 +101,39 @@ namespace DmsApi.Services
             using var ms = new MemoryStream(bytes);
             using var doc = WordprocessingDocument.Open(ms, false);
             return doc.MainDocumentPart?.Document?.Body?.InnerText ?? string.Empty;
+        }
+
+        public async Task<string> ExtractFromFileAsync(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                _logger.LogWarning("ExtractFromFileAsync: file not found at {FilePath}", filePath);
+                return string.Empty;
+            }
+
+            var ext = Path.GetExtension(filePath).ToLowerInvariant();
+            var bytes = await File.ReadAllBytesAsync(filePath);
+
+            _logger.LogInformation("Extracting text from {Ext} file ({Bytes} bytes): {FilePath}", ext, bytes.Length, Path.GetFileName(filePath));
+
+            try
+            {
+                var result = ext switch
+                {
+                    ".pdf"  => ExtractFromPdf(bytes),
+                    ".docx" => ExtractFromDocx(bytes),
+                    ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tiff" or ".tif" => ExtractFromImage(bytes),
+                    _ => string.Empty
+                };
+
+                _logger.LogInformation("Extraction result: {Length} chars extracted from {FileName}", result.Length, Path.GetFileName(filePath));
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Text extraction failed for {FilePath}", filePath);
+                return string.Empty;
+            }
         }
 
         private string ExtractFromImage(byte[] bytes)

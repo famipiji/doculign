@@ -225,7 +225,8 @@ namespace DmsApi.Controllers
                 using (var stream = System.IO.File.Create(filePath))
                     await attachment.CopyToAsync(stream);
 
-                extractedText = await _extractor.ExtractAsync(attachment);
+                // Extract from the saved file — IFormFile stream is exhausted after CopyToAsync
+                extractedText = await _extractor.ExtractFromFileAsync(filePath);
             }
 
             var document = new Document
@@ -249,13 +250,51 @@ namespace DmsApi.Controllers
             return Ok(document);
         }
 
-        // Index all existing DB documents into Elasticsearch
+        [HttpGet("{id}/debug")]
+        public async Task<IActionResult> Debug(int id)
+        {
+            var doc = await _context.Documents.FindAsync(id);
+            if (doc == null) return NotFound();
+
+            try
+            {
+                var esResponse = await _elastic.GetAsync<DocumentIndexModel>(id.ToString(), g => g.Index(IndexName));
+                if (esResponse.IsValidResponse && esResponse.Source != null)
+                {
+                    var src = esResponse.Source;
+                    return Ok(new
+                    {
+                        indexedInEs = true,
+                        extractedTextLength = src.ExtractedText?.Length ?? 0,
+                        extractedTextPreview = src.ExtractedText?.Length > 0
+                            ? src.ExtractedText[..Math.Min(300, src.ExtractedText.Length)]
+                            : "(empty)",
+                        contentLength = src.Content?.Length ?? 0,
+                        fileOnDisk = !string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath),
+                        filePath = doc.FilePath
+                    });
+                }
+                return Ok(new { indexedInEs = false, fileOnDisk = !string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath), filePath = doc.FilePath });
+            }
+            catch (Exception ex)
+            {
+                return Ok(new { error = ex.Message, filePath = doc.FilePath });
+            }
+        }
+
+        // Index all existing DB documents into Elasticsearch, re-extracting text from stored files
         [HttpPost("reindex")]
         public async Task<IActionResult> Reindex()
         {
             var documents = await _context.Documents.ToListAsync();
             foreach (var doc in documents)
-                await IndexDocument(doc);
+            {
+                var extractedText = string.Empty;
+                if (!string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath))
+                    extractedText = await _extractor.ExtractFromFileAsync(doc.FilePath);
+
+                await IndexDocument(doc, extractedText);
+            }
 
             return Ok(new { indexed = documents.Count });
         }

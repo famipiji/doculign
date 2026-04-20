@@ -25,6 +25,7 @@ export const DocumentsPage: React.FC = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const [resultCount, setResultCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
@@ -96,6 +97,7 @@ export const DocumentsPage: React.FC = () => {
       merged.sort((a, b) => (b.matchCount ?? 0) - (a.matchCount ?? 0));
 
       SearchBehaviorService.setCachedSearch(merged);
+      setResultCount(merged.length);
       setHasSearched(true);
     } catch {
       setError('Search failed — is the backend running?');
@@ -118,7 +120,7 @@ export const DocumentsPage: React.FC = () => {
         </div>
         <div className="flex justify-between items-end">
           <div>
-            <h1 className="text-3xl font-extrabold text-primary tracking-tight">Repository Search</h1>
+            <h1 className="text-3xl font-extrabold text-primary tracking-tight">Search</h1>
             <p className="text-sm text-text-muted mt-1">Search by file name, metadata fields, or text content inside files.</p>
           </div>
           <button
@@ -279,6 +281,14 @@ export const DocumentsPage: React.FC = () => {
           <div className="flex flex-col items-center justify-center h-full gap-3 text-text-muted">
             <div className="w-8 h-8 border-4 border-accent/20 border-t-accent rounded-full animate-spin" />
             <p className="text-xs font-bold uppercase tracking-widest">Searching...</p>
+          </div>
+        ) : hasSearched && resultCount === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-text-muted">
+            <Search size={48} className="opacity-20" />
+            <div className="text-center">
+              <p className="text-sm font-bold uppercase tracking-widest">No Results Found</p>
+              <p className="text-xs mt-1 opacity-70">Try a different keyword or adjust your filters</p>
+            </div>
           </div>
         ) : (
           <ResultTable />
