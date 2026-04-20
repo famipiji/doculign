@@ -71,7 +71,7 @@ export const CreateRecordForm: React.FC<CreateRecordFormProps> = ({ onClose, onS
     }
 
     try {
-      const response = await fetch('/api/Document', {
+      const response = await fetch('/api/documents', {
         method: 'POST',
         body: formData, // Browser handles boundary for FormData
       });

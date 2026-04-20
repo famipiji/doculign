@@ -4,13 +4,8 @@ import {
   FileText,
   Search,
   Bell,
-  LayoutDashboard,
-  Files,
   Clock,
   Share2,
-  Trash2,
-  Settings,
-  LogOut,
   MoreVertical,
   Download,
   Eye,
@@ -63,21 +58,35 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
 
-  const fetchData = useCallback(() => {
+  const mockDocuments: Document[] = [
+    { id: 1, name: 'Contract_2024_Q3_FINAL.pdf', author: 'James Chen', fileSizeBytes: 2048000, fileType: 'PDF', updatedAt: new Date(Date.now() - 2 * 3600000).toISOString() },
+    { id: 2, name: 'Financial_Q3_Audit.vlt', author: 'Alex Mercer', fileSizeBytes: 512000, fileType: 'VLT', updatedAt: new Date(Date.now() - 5 * 3600000).toISOString() },
+    { id: 3, name: 'Employee_Record_Batch_07.xlsx', author: 'Sarah Miller', fileSizeBytes: 1048576, fileType: 'XLSX', updatedAt: new Date(Date.now() - 86400000).toISOString() },
+    { id: 4, name: 'Compliance_Report_2023.docx', author: 'Maria K.', fileSizeBytes: 307200, fileType: 'DOCX', updatedAt: new Date(Date.now() - 2 * 86400000).toISOString() },
+  ];
+
+  const fetchData = useCallback(async () => {
     setLoading(true);
-    Promise.all([
-      fetch('/api/documents').then(r => r.json()),
-      fetch('/api/documents/stats').then(r => r.json()),
-    ])
-      .then(([docs, statsData]) => {
-        setDocuments(docs);
-        setStats(statsData);
-        setLoading(false);
-      })
-      .catch(() => {
-        setError('Failed to load data from server.');
-        setLoading(false);
-      });
+    setError(null);
+    try {
+      const [docsRes, statsRes] = await Promise.all([
+        fetch('/api/documents'),
+        fetch('/api/documents/stats'),
+      ]);
+
+      if (!docsRes.ok || !statsRes.ok) throw new Error('API error');
+
+      const [docs, statsData] = await Promise.all([docsRes.json(), statsRes.json()]);
+
+      setDocuments(Array.isArray(docs) && docs.length > 0 ? docs : mockDocuments);
+      setStats(statsData);
+    } catch {
+      setDocuments(mockDocuments);
+      setStats({ totalDocuments: mockDocuments.length, totalSizeBytes: mockDocuments.reduce((s, d) => s + d.fileSizeBytes, 0), storageLimitBytes: 10737418240 });
+      setError('API unavailable — showing sample data.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { fetchData(); }, [fetchData]);
@@ -85,67 +94,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const storagePercent = Math.round((stats.totalSizeBytes / stats.storageLimitBytes) * 100);
 
   return (
-    <div className="flex h-screen bg-bg font-inter overflow-hidden">
-      {/* Sidebar */}
-      <aside className="w-64 bg-primary text-white flex-col hidden md:flex">
-        <div className="p-6 border-b border-white/10 flex items-center gap-3">
-          <div className="w-8 h-8 bg-white/20 rounded-md flex items-center justify-center">
-            <div className="w-3 h-3 border-2 border-white rounded-sm" />
-          </div>
-          <span className="text-xl font-bold tracking-tight uppercase">DOCULIGN</span>
-        </div>
-
-        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-          <SidebarLink icon={<LayoutDashboard size={18} />} label="Dashboard" active />
-          <SidebarLink icon={<Files size={18} />} label="All Documents" />
-          <SidebarLink icon={<Clock size={18} />} label="Recent" />
-          <SidebarLink icon={<Share2 size={18} />} label="Shared with me" />
-          <SidebarLink icon={<Trash2 size={18} />} label="Trash" />
-          <div className="pt-4 mt-4 border-t border-white/10">
-            <SidebarLink icon={<Settings size={18} />} label="Settings" />
-            <button
-              onClick={onLogout}
-              className="flex items-center gap-3 w-full p-2.5 rounded-md text-sm text-white/70 hover:bg-white/10 hover:text-white transition-all mt-1"
-            >
-              <LogOut size={18} />
-              <span>Logout</span>
-            </button>
-          </div>
-        </nav>
-
-        <div className="p-6 border-t border-white/10">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-xs font-bold">
-              {user.username.substring(0, 1).toUpperCase()}
-            </div>
-            <div className="overflow-hidden">
-              <p className="text-sm font-semibold truncate">{user.username}</p>
-              <p className="text-[10px] text-white/50 truncate">{user.email}</p>
-            </div>
-          </div>
-        </div>
-      </aside>
-
-      {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden">
         {/* Navbar */}
         <header className="h-16 bg-white border-b border-border flex items-center justify-between px-8 shrink-0">
           <div className="flex items-center gap-4 flex-1 max-w-xl">
-            <div className="relative w-full">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" size={16} />
-              <input
-                type="text"
-                placeholder="Search documents, folders, tags..."
-                className="w-full bg-bg border border-border rounded-lg py-2 pl-10 pr-4 text-sm focus:outline-none focus:border-accent transition-all"
-              />
-            </div>
+            
           </div>
 
           <div className="flex items-center gap-4 ml-4">
-            <button className="p-2 rounded-full hover:bg-bg text-text-muted transition-all relative">
-              <Bell size={18} />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
-            </button>
+            
             <div className="h-8 w-px bg-border mx-2" />
             <button
               onClick={() => setShowCreateForm(true)}
@@ -163,6 +120,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
               onClose={() => setShowCreateForm(false)}
               onSuccess={() => { setShowCreateForm(false); fetchData(); }}
             />
+          )}
+
+          {error && (
+            <div className="mb-6 px-4 py-3 bg-amber-50 border border-amber-200 text-amber-700 rounded-lg text-xs flex items-center gap-2">
+              <span className="font-bold uppercase tracking-wider">⚠ {error}</span>
+            </div>
           )}
 
           <div className="mb-8 flex justify-between items-end">
@@ -270,17 +233,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             )}
           </section>
         </div>
-      </main>
     </div>
   );
 };
 
-const SidebarLink: React.FC<{ icon: React.ReactNode; label: string; active?: boolean }> = ({ icon, label, active }) => (
-  <button className={`flex items-center gap-3 w-full p-2.5 rounded-md text-sm transition-all ${active ? 'bg-accent text-white font-bold' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}>
-    {icon}
-    <span>{label}</span>
-  </button>
-);
 
 const StatCard: React.FC<{ label: string; value: string; icon: React.ReactNode; change?: string; progress?: number }> = ({ label, value, icon, change, progress }) => (
   <div className="bg-white p-6 rounded-xl border border-border shadow-sm hover:shadow-md transition-shadow">
