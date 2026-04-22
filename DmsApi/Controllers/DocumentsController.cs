@@ -165,7 +165,7 @@ namespace DmsApi.Controllers
             }
             catch { }
 
-            // Fallback: MySQL LIKE search across name, author, recordType and metadata
+            // Fallback: PostgreSQL search across name, author, recordType and metadata
             var fallback = await _context.Documents
                 .Where(d =>
                     d.Name.Contains(q) ||

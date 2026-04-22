@@ -13,7 +13,7 @@
   <PackageReference Include="PDFtoImage" Version="4.1.0" />
   <PackageReference Include="SkiaSharp" Version="2.88.9" />
   <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
-  <PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
+  <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
   <PackageReference Include="Tesseract" Version="5.2.0" />
 </ItemGroup>
 

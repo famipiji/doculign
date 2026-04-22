@@ -1,13 +1,13 @@
 
 services:
   db:
-    image: mysql:8.0
+    image: postgres:16
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: P@ssw0rd123
-      MYSQL_DATABASE: dms_db
+      POSTGRES_PASSWORD: Q@simbu5uk
+      POSTGRES_DB: dms_db
     ports:
-      - "3307:3306"
+      - "5432:5432"
 
   api:
     build: 
@@ -18,4 +18,4 @@ services:
     depends_on:
       - db
     environment:
-      ConnectionStrings__DefaultConnection: "Server=db;Database=dms_db;Uid=root;Pwd=P@ssw0rd;"
+      ConnectionStrings__DefaultConnection: "Host=db;Database=dms_db;Username=postgres;Password=Q@simbu5uk;"

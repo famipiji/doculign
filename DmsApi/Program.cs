@@ -9,7 +9,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 0))));
+    options.UseNpgsql(connectionString));
 
 var elasticUrl = builder.Configuration["Elasticsearch:Url"] ?? "http://localhost:9200";
 var elasticSettings = new ElasticsearchClientSettings(new Uri(elasticUrl))
