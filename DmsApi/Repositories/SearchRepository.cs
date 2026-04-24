@@ -21,15 +21,28 @@ namespace DmsApi.Repositories
 
         public async Task<(List<Document> documents, int count)> SearchAsync(DmsApi.Models.SearchRequest request)
         {
-            // Text search: Elasticsearch returns candidate IDs, PostgreSQL fetches by PK
+            // Text search: try Elasticsearch first, fall back to PostgreSQL ILIKE
             if (!string.IsNullOrWhiteSpace(request.SearchTerm))
             {
                 var ids = await GetElasticsearchIds(request.SearchTerm);
-                if (ids.Count == 0) return ([], 0);
+                List<Document> candidates;
 
-                var candidates = await _context.Documents
-                    .Where(d => ids.Contains(d.Id))
-                    .ToListAsync();
+                if (ids.Count > 0)
+                {
+                    candidates = await _context.Documents
+                        .Where(d => ids.Contains(d.Id))
+                        .ToListAsync();
+                }
+                else
+                {
+                    var term = request.SearchTerm.ToLower();
+                    candidates = await _context.Documents
+                        .Where(d => d.Name.ToLower().Contains(term)
+                                 || d.Author.ToLower().Contains(term)
+                                 || d.RecordType.ToLower().Contains(term)
+                                 || d.FileType.ToLower().Contains(term))
+                        .ToListAsync();
+                }
 
                 if (request.Items.Any())
                     candidates = request.Kind == 1

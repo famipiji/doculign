@@ -38,12 +38,15 @@ namespace DmsApi.Controllers
         private static volatile int _seedTarget = 0;
         private static string _seedMessage = string.Empty;
 
-        public DocumentsController(AppDbContext context, ElasticsearchClient elastic, TextExtractionService extractor, IServiceScopeFactory scopeFactory)
+        private readonly ILogger<DocumentsController> _logger;
+
+        public DocumentsController(AppDbContext context, ElasticsearchClient elastic, TextExtractionService extractor, IServiceScopeFactory scopeFactory, ILogger<DocumentsController> logger)
         {
             _context = context;
             _elastic = elastic;
             _extractor = extractor;
             _scopeFactory = scopeFactory;
+            _logger = logger;
         }
 
         private static string BuildContent(Document doc, string extractedText = "")
@@ -84,8 +87,19 @@ namespace DmsApi.Controllers
 
         private async Task IndexDocument(Document doc, string extractedText = "")
         {
-            var model = ToIndexModel(doc, extractedText);
-            await _elastic.IndexAsync(model, i => i.Index(IndexName).Id(doc.Id.ToString()));
+            try
+            {
+                var model = ToIndexModel(doc, extractedText);
+                var response = await _elastic.IndexAsync(model, i => i.Index(IndexName).Id(doc.Id.ToString()));
+                if (!response.IsValidResponse)
+                    _logger.LogError("ES index failed for doc {Id}: {Error}", doc.Id, response.ElasticsearchServerError?.Error?.Reason ?? response.DebugInformation);
+                else
+                    _logger.LogInformation("ES indexed doc {Id} ({Chars} chars)", doc.Id, extractedText.Length);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "ES index threw for doc {Id}", doc.Id);
+            }
         }
 
         [HttpGet("{id}/content")]
@@ -349,7 +363,7 @@ namespace DmsApi.Controllers
             });
 
         [HttpPost("seed")]
-        public IActionResult SeedDocuments([FromQuery] int count = 100_000)
+        public IActionResult SeedDocuments([FromQuery] int count = 100_000, [FromQuery] bool clear = false)
         {
             if (_seeding)
                 return Conflict(new { message = "Seeding already running.", progress = _seedProgress, total = _seedTarget });
@@ -367,6 +381,14 @@ namespace DmsApi.Controllers
                     using var scope = _scopeFactory.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                     db.ChangeTracker.AutoDetectChangesEnabled = false;
+
+                    if (clear)
+                    {
+                        _seedMessage = "Clearing existing documents...";
+                        await db.Database.ExecuteSqlRawAsync("TRUNCATE TABLE \"Documents\" RESTART IDENTITY CASCADE");
+                        await _elastic.DeleteByQueryAsync<DocumentIndexModel>(d => d.Indices(IndexName).Query(q => q.MatchAll(new Elastic.Clients.Elasticsearch.QueryDsl.MatchAllQuery())));
+                        _seedMessage = "Cleared. Starting insert...";
+                    }
 
                     var rng = new Random();
                     const int batchSize = 1000;
@@ -429,7 +451,30 @@ namespace DmsApi.Controllers
                         _seedMessage = $"Inserted {inserted:N0} / {count:N0}";
                     }
 
-                    _seedMessage = $"Done — {inserted:N0} documents inserted. Run POST /api/documents/reindex to index in Elasticsearch.";
+                    _seedMessage = $"Done — {inserted:N0} documents inserted. Now reindexing into Elasticsearch...";
+
+                    // Auto-reindex into Elasticsearch in bulk
+                    var reindexed = 0;
+                    var reindexSkip = 0;
+                    const int reindexPage = 1000;
+                    const int reindexBulk = 500;
+                    while (true)
+                    {
+                        var page = await db.Documents.OrderBy(d => d.Id).Skip(reindexSkip).Take(reindexPage).ToListAsync();
+                        if (page.Count == 0) break;
+                        var models2 = page.Select(d => ToIndexModel(d)).ToList();
+                        for (int j = 0; j < models2.Count; j += reindexBulk)
+                        {
+                            var sub = models2.Skip(j).Take(reindexBulk).ToList();
+                            await _elastic.BulkAsync(b => b.Index(IndexName).IndexMany(sub, (op, m) => op.Id(m.Id.ToString())));
+                        }
+                        reindexed += page.Count;
+                        reindexSkip += reindexPage;
+                        _seedMessage = $"Inserted {inserted:N0} docs. Reindexing: {reindexed:N0} / {inserted:N0}";
+                        if (page.Count < reindexPage) break;
+                    }
+
+                    _seedMessage = $"Done — {inserted:N0} documents inserted and indexed in Elasticsearch.";
                 }
                 catch (Exception ex)
                 {
@@ -443,7 +488,7 @@ namespace DmsApi.Controllers
 
             return Accepted(new
             {
-                message = $"Seeding {count:N0} documents in background.",
+                message = $"{(clear ? "Clearing then seeding" : "Seeding")} {count:N0} documents in background. Will auto-reindex into Elasticsearch when done.",
                 statusUrl = "/api/documents/seed-status"
             });
         }

@@ -10,7 +10,7 @@ services:
       - "5432:5432"
 
   api:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     ports:
@@ -19,3 +19,4 @@ services:
       - db
     environment:
       ConnectionStrings__DefaultConnection: "Host=db;Database=dms_db;Username=postgres;Password=Q@simbu5uk;"
+      Elasticsearch__Url: "http://host.docker.internal:9200"
