@@ -36,15 +36,23 @@ namespace DmsApi.Controllers
 
             try
             {
-                var response = await _elastic.SearchAsync<DocumentIndexModel>(s => s
+                // Use a minimal model — content/extractedText can be megabytes per doc.
+                // ES still uses those fields for scoring and highlights server-side.
+                var response = await _elastic.SearchAsync<ContentHitDoc>(s => s
                     .Indices(IndexName)
                     .Query(query => query
-                        .MultiMatch(mm => mm
-                            .Query(q)
-                            .Fields(new[] { "name^3", "author^2", "recordType^2", "content", "extractedText" })
-                            .Fuzziness(new Fuzziness("AUTO"))
-                        )
+                        .Bool(b => b.Should(
+                            s => s.MultiMatch(mm => mm
+                                .Query(q)
+                                .Fields(new[] { "name^3", "author^2", "recordType^2" })
+                                .Fuzziness(new Fuzziness("AUTO"))),
+                            s => s.MultiMatch(mm => mm
+                                .Query(q)
+                                .Fields(new[] { "content", "extractedText" })
+                                .Type(Elastic.Clients.Elasticsearch.QueryDsl.TextQueryType.Phrase))
+                        ).MinimumShouldMatch(1))
                     )
+                    .Source(new SourceConfig(new SourceFilter { Includes = (Fields)"id,name" }))
                     .Highlight(h => h
                         .Fields(f => f
                             .Add("content", hf => hf.NumberOfFragments(1).FragmentSize(200))
@@ -54,7 +62,7 @@ namespace DmsApi.Controllers
                         .PreTags(["<em>"])
                         .PostTags(["</em>"])
                     )
-                    .Size(50)
+                    .Size(20)
                 );
 
                 if (!response.IsValidResponse)
@@ -89,5 +97,7 @@ namespace DmsApi.Controllers
                 return Ok(new List<ContentSearchResult>());
             }
         }
+
+        private record ContentHitDoc(int Id = 0, string Name = "");
     }
 }

@@ -37,6 +37,15 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    for (var attempt = 1; attempt <= 10; attempt++)
+    {
+        try { db.Database.EnsureCreated(); break; }
+        catch (Exception ex) when (attempt < 10)
+        {
+            Console.WriteLine($"DB not ready (attempt {attempt}/10): {ex.Message}. Retrying in 3s...");
+            Thread.Sleep(3000);
+        }
+    }
     try
     {
         db.Database.EnsureCreated();

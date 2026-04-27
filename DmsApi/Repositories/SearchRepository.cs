@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using DmsApi.Data;
 using DmsApi.Models;
 using Elastic.Clients.Elasticsearch;
+using Elastic.Clients.Elasticsearch.Core.Search;
 using System.Text.Json;
 using EsSearchRequest = Elastic.Clients.Elasticsearch.SearchRequest;
 
@@ -21,16 +22,51 @@ namespace DmsApi.Repositories
 
         public async Task<(List<Document> documents, int count)> SearchAsync(DmsApi.Models.SearchRequest request)
         {
-            // Text search: try Elasticsearch first, fall back to PostgreSQL ILIKE
             if (!string.IsNullOrWhiteSpace(request.SearchTerm))
             {
-                var ids = await GetElasticsearchIds(request.SearchTerm);
+                // Fast path: no criteria filters — paginate directly at ES level.
+                // Only fetches the exact page needed instead of 1000 docs.
+                if (!request.Items.Any())
+                {
+                    var (pageIds, total) = await GetElasticsearchPage(request.SearchTerm, request.Skip, request.Take);
+                    if (total > 0)
+                    {
+                        if (pageIds.Count > 0)
+                        {
+                            var pageDocs = await _context.Documents
+                                .Where(d => pageIds.Contains(d.Id))
+                                .ToListAsync();
+                            // Preserve ES relevance order
+                            var ordered = pageIds
+                                .Select(id => pageDocs.FirstOrDefault(d => d.Id == id))
+                                .Where(d => d != null)
+                                .Cast<Document>()
+                                .ToList();
+                            return (ordered, (int)Math.Min(total, 10000));
+                        }
+                        return ([], (int)Math.Min(total, 10000));
+                    }
+
+                    // ES returned nothing — fall back to PostgreSQL
+                    var term = request.SearchTerm.ToLower();
+                    var fallback = await _context.Documents
+                        .Where(d => d.Name.ToLower().Contains(term)
+                                 || d.Author.ToLower().Contains(term)
+                                 || d.RecordType.ToLower().Contains(term)
+                                 || d.FileType.ToLower().Contains(term))
+                        .ToListAsync();
+                    fallback = ApplyOrder(fallback, request.SortOptions);
+                    return (fallback.Skip(request.Skip).Take(request.Take).ToList(), fallback.Count);
+                }
+
+                // Criteria path: need all matching IDs to apply in-memory filters
+                var allIds = await GetElasticsearchIds(request.SearchTerm);
                 List<Document> candidates;
 
-                if (ids.Count > 0)
+                if (allIds.Count > 0)
                 {
                     candidates = await _context.Documents
-                        .Where(d => ids.Contains(d.Id))
+                        .Where(d => allIds.Contains(d.Id))
                         .ToListAsync();
                 }
                 else
@@ -78,21 +114,61 @@ namespace DmsApi.Repositories
             return (docs, count);
         }
 
+        // Paginates at ES level — only fetches the exact page, not all matches.
+        private async Task<(List<int> ids, long total)> GetElasticsearchPage(string searchTerm, int from, int size)
+        {
+            try
+            {
+                var response = await _elastic.SearchAsync<EsDoc>(s => s
+                    .Indices(IndexName)
+                    .Query(q => q.Bool(b => b.Should(
+                        s => s.MultiMatch(mm => mm
+                            .Query(searchTerm)
+                            .Fields(new[] { "name^3", "author^2", "recordType^2" })
+                            .Fuzziness(new Fuzziness("AUTO"))),
+                        s => s.MultiMatch(mm => mm
+                            .Query(searchTerm)
+                            .Fields(new[] { "content", "extractedText" })
+                            .Type(Elastic.Clients.Elasticsearch.QueryDsl.TextQueryType.Phrase))
+                    ).MinimumShouldMatch(1)))
+                    .Source(new SourceConfig(false))
+                    .From(from)
+                    .Size(size));
+
+                if (!response.IsValidResponse) return ([], 0);
+                var ids = response.Hits
+                    .Select(h => int.TryParse(h.Id, out var id) ? id : 0)
+                    .Where(id => id > 0)
+                    .ToList();
+                var total = ExtractTotal(response.HitsMetadata);
+                return (ids, total);
+            }
+            catch { return ([], 0); }
+        }
+
+        // Used by criteria path — fetches up to 1000 IDs for in-memory filtering
         private async Task<List<int>> GetElasticsearchIds(string searchTerm)
         {
             try
             {
                 var response = await _elastic.SearchAsync<EsDoc>(s => s
                     .Indices(IndexName)
-                    .Query(q => q.MultiMatch(mm => mm
-                        .Query(searchTerm)
-                        .Fields(new[] { "name^3", "author^2", "recordType^2", "content", "extractedText" })
-                        .Fuzziness(new Fuzziness("AUTO"))))
-                    .Size(10000));
+                    .Query(q => q.Bool(b => b.Should(
+                        s => s.MultiMatch(mm => mm
+                            .Query(searchTerm)
+                            .Fields(new[] { "name^3", "author^2", "recordType^2" })
+                            .Fuzziness(new Fuzziness("AUTO"))),
+                        s => s.MultiMatch(mm => mm
+                            .Query(searchTerm)
+                            .Fields(new[] { "content", "extractedText" })
+                            .Type(Elastic.Clients.Elasticsearch.QueryDsl.TextQueryType.Phrase))
+                    ).MinimumShouldMatch(1)))
+                    .Source(new SourceConfig(false))
+                    .Size(1000));
 
                 if (!response.IsValidResponse) return [];
                 return response.Hits
-                    .Select(h => h.Source?.Id ?? 0)
+                    .Select(h => int.TryParse(h.Id, out var id) ? id : 0)
                     .Where(id => id > 0)
                     .ToList();
             }
@@ -226,6 +302,9 @@ namespace DmsApi.Repositories
             return ordered.ToList();
         }
 
-        private record EsDoc(int Id);
+        private static long ExtractTotal(HitsMetadata<EsDoc>? meta) =>
+            meta?.Total?.Match(th => th.Value, l => l) ?? 0;
+
+        private record EsDoc;
     }
 }

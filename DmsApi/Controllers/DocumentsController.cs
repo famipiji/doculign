@@ -49,6 +49,129 @@ namespace DmsApi.Controllers
             _logger = logger;
         }
 
+        private static string GenerateBodyText(string recordType, string dept, string author, string status, int seed)
+        {
+            var rng = new Random(seed);
+
+            string Pick(string[] arr) => arr[rng.Next(arr.Length)];
+            string Num(int min, int max) => rng.Next(min, max).ToString();
+            string Amount() => $"${rng.Next(500, 250_000):N0}";
+            string Date(int daysBack) => DateTime.UtcNow.AddDays(-rng.Next(1, daysBack)).ToString("MMMM d, yyyy");
+
+            return recordType switch
+            {
+                "Invoice" => $"""
+                    INVOICE DOCUMENT
+                    Prepared by: {author} | Department: {dept} | Status: {status}
+
+                    This invoice covers professional services rendered during the billing period ending {Date(60)}.
+                    The total amount due is {Amount()}, payable within 30 days of receipt.
+
+                    Services include {Pick(["consulting", "system integration", "data migration", "software licensing", "maintenance support"])},
+                    {Pick(["technical training", "project management", "audit services", "compliance review", "infrastructure setup"])},
+                    and {Pick(["documentation", "quality assurance", "reporting", "stakeholder coordination", "risk assessment"])}.
+
+                    Invoice reference {dept}-INV-{Num(1000,9999)} was approved by {Pick(["finance director", "department head", "procurement manager"])} on {Date(30)}.
+                    Payment should be directed to accounts payable. Late payments incur a {Num(1,3)}% monthly interest charge.
+                    All amounts are exclusive of applicable taxes. Please retain this document for your records.
+                    """,
+
+                "Employee" => $"""
+                    EMPLOYEE RECORD
+                    Department: {dept} | Prepared by: {author} | Employment Status: {status}
+
+                    This record documents the employment details and performance assessment for the period ending {Date(90)}.
+                    The employee has been with the organisation for {Num(1,15)} years and holds the position of
+                    {Pick(["Senior Analyst", "Team Lead", "Principal Engineer", "Department Coordinator", "Operations Manager", "Junior Associate"])}.
+
+                    Performance review score: {Num(65,99)}/100.
+                    Key competencies assessed include communication, technical proficiency, team collaboration, and project delivery.
+                    The employee completed {Num(2,8)} training courses this quarter including
+                    {Pick(["workplace safety", "data privacy", "leadership development", "technical certification", "compliance awareness"])}.
+
+                    Salary band: {Pick(["Band 3", "Band 4", "Band 5", "Grade A", "Grade B"])}.
+                    Annual leave balance: {Num(3,25)} days remaining.
+                    Next review scheduled for {Date(-90)}.
+                    """,
+
+                "Resume" => $"""
+                    CANDIDATE RESUME
+                    Submitted to: {dept} | Reviewed by: {author} | Application Status: {status}
+
+                    Professional Summary:
+                    Experienced professional with {Num(3,20)} years in {Pick(["software development", "financial analysis", "operations management", "human resources", "data engineering", "project management"])}.
+                    Proven track record delivering {Pick(["scalable systems", "cost reductions", "process improvements", "compliance frameworks", "high-impact projects"])}.
+
+                    Education: {Pick(["Bachelor of Science", "Master of Business Administration", "Bachelor of Engineering", "Master of Science"])} from
+                    {Pick(["University of Technology", "National University", "City College", "State University", "Business School"])}, graduated {Num(2000,2022)}.
+
+                    Key Skills: {Pick(["Python, SQL, Azure", "Java, Kubernetes, CI/CD", "Excel, PowerBI, Tableau", "SAP, Oracle, ERP systems", "Agile, Scrum, JIRA"])},
+                    {Pick(["stakeholder management", "budget planning", "risk assessment", "team leadership", "vendor negotiation"])}.
+
+                    Most recent role: {Pick(["Senior Engineer", "Lead Analyst", "Project Manager", "Operations Lead"])} at {Pick(["TechCorp", "FinanceCo", "GlobalOps", "DataSystems"])},
+                    {Date(365)} to {Date(30)}.
+                    Reason for leaving: {Pick(["seeking new challenges", "relocation", "company restructuring", "career growth", "contract ended"])}.
+                    """,
+
+                "ComplianceAudit" => $"""
+                    COMPLIANCE AUDIT REPORT
+                    Auditing Authority: {dept} | Lead Auditor: {author} | Audit Result: {status}
+
+                    This audit was conducted in accordance with regulatory requirements effective {Date(180)}.
+                    Scope covers {Pick(["data protection", "financial controls", "operational safety", "environmental standards", "IT security", "anti-money laundering"])} compliance.
+
+                    Findings Summary:
+                    Total controls evaluated: {Num(20,80)}.
+                    Controls passing: {Num(15,70)}.
+                    Minor non-conformances: {Num(0,5)}.
+                    Major non-conformances: {Num(0,2)}.
+
+                    Key observations:
+                    1. {Pick(["Data retention policies are not consistently applied.", "Access control logs show irregular patterns.", "Training records are incomplete for Q3.", "Third-party vendor agreements require renewal.", "Incident response procedures need updating."])}
+                    2. {Pick(["Documentation gaps found in change management process.", "Risk register was last updated over 6 months ago.", "Backup verification tests were not performed quarterly.", "User access reviews are overdue for 12 accounts.", "Policy acknowledgements pending for new staff."])}
+
+                    Recommended remediation deadline: {Date(-60)}.
+                    Next scheduled audit: {Date(-365)}.
+                    This report is confidential and intended for authorised personnel only.
+                    """,
+
+                _ => $"""
+                    GENERAL DOCUMENT
+                    Department: {dept} | Author: {author} | Status: {status}
+
+                    This document was prepared on {Date(30)} as part of the {dept} department's standard operating procedures.
+                    It covers {Pick(["quarterly performance targets", "project delivery milestones", "resource allocation plans", "process improvement initiatives", "strategic objectives"])}.
+
+                    Summary of contents:
+                    This document outlines the {Pick(["goals", "procedures", "guidelines", "requirements", "outcomes"])} established by the {dept} team.
+                    Approvals were obtained from {Pick(["senior management", "the steering committee", "department heads", "the board"])} on {Date(45)}.
+
+                    Key points:
+                    - Budget allocated: {Amount()}
+                    - Timeline: {Num(1,12)} months
+                    - Team size: {Num(2,20)} members
+                    - Priority: {Pick(["High", "Medium", "Critical", "Standard"])}
+
+                    This document is subject to review every {Pick(["6 months", "12 months", "quarter"])}.
+                    For questions, contact {author} in the {dept} department.
+                    All stakeholders must acknowledge receipt by {Date(-30)}.
+                    """
+            };
+        }
+
+        private static string? TryGetMetaField(string metadataJson, string key)
+        {
+            try
+            {
+                var el = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(metadataJson);
+                foreach (var prop in el.EnumerateObject())
+                    if (prop.Name.Equals(key, StringComparison.OrdinalIgnoreCase))
+                        return prop.Value.GetString();
+            }
+            catch { }
+            return null;
+        }
+
         private static string BuildContent(Document doc, string extractedText = "")
         {
             var parts = new List<string> { doc.Name, doc.Author, doc.RecordType, doc.FileType };
@@ -462,7 +585,13 @@ namespace DmsApi.Controllers
                     {
                         var page = await db.Documents.OrderBy(d => d.Id).Skip(reindexSkip).Take(reindexPage).ToListAsync();
                         if (page.Count == 0) break;
-                        var models2 = page.Select(d => ToIndexModel(d)).ToList();
+                        var models2 = page.Select(d =>
+                        {
+                            var dept = TryGetMetaField(d.Metadata, "department") ?? "General";
+                            var status = TryGetMetaField(d.Metadata, "status") ?? "Active";
+                            var body = GenerateBodyText(d.RecordType, dept, d.Author, status, d.Id);
+                            return ToIndexModel(d, body);
+                        }).ToList();
                         for (int j = 0; j < models2.Count; j += reindexBulk)
                         {
                             var sub = models2.Skip(j).Take(reindexBulk).ToList();
