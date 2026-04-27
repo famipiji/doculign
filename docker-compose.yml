@@ -6,7 +6,9 @@ services:
       POSTGRES_PASSWORD: Q@simbu5uk
       POSTGRES_DB: dms_db
     ports:
-      - "5432:5432"
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
@@ -22,6 +24,24 @@ services:
       memlock:
         soft: -1
         hard: -1
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+
+  seaweedfs-master:
+    image: chrislusf/seaweedfs
+    command: master -port=9333
+    ports:
+      - "9333:9333"
+
+  seaweedfs-volume:
+    image: chrislusf/seaweedfs
+    command: volume -mserver=seaweedfs-master:9333 -port=8080 -dir=/data
+    volumes:
+      - seaweedfs_data:/data
+    ports:
+      - "8082:8080"
+    depends_on:
+      - seaweedfs-master
 
   api:
     build:
@@ -32,9 +52,13 @@ services:
     depends_on:
       - db
       - elasticsearch
+      - seaweedfs-master
+      - seaweedfs-volume
     environment:
       ConnectionStrings__DefaultConnection: "Host=db;Database=dms_db;Username=postgres;Password=Q@simbu5uk;"
       Elasticsearch__Url: "http://elasticsearch:9200"
+      SeaweedFS__MasterUrl: "http://seaweedfs-master:9333"
+      SeaweedFS__VolumeUrl: "http://seaweedfs-volume:8080"
 
   frontend:
     build:
@@ -44,3 +68,8 @@ services:
       - "3000:80"
     depends_on:
       - api
+
+volumes:
+  seaweedfs_data:
+  postgres_data:
+  elasticsearch_data:

@@ -29,6 +29,7 @@ namespace DmsApi.Controllers
         private readonly AppDbContext _context;
         private readonly ElasticsearchClient _elastic;
         private readonly TextExtractionService _extractor;
+        private readonly SeaweedFsService _seaweedFs;
         private readonly IServiceScopeFactory _scopeFactory;
         private const string IndexName = "doculign_documents";
 
@@ -40,11 +41,12 @@ namespace DmsApi.Controllers
 
         private readonly ILogger<DocumentsController> _logger;
 
-        public DocumentsController(AppDbContext context, ElasticsearchClient elastic, TextExtractionService extractor, IServiceScopeFactory scopeFactory, ILogger<DocumentsController> logger)
+        public DocumentsController(AppDbContext context, ElasticsearchClient elastic, TextExtractionService extractor, SeaweedFsService seaweedFs, IServiceScopeFactory scopeFactory, ILogger<DocumentsController> logger)
         {
             _context = context;
             _elastic = elastic;
             _extractor = extractor;
+            _seaweedFs = seaweedFs;
             _scopeFactory = scopeFactory;
             _logger = logger;
         }
@@ -335,9 +337,6 @@ namespace DmsApi.Controllers
             if (doc == null || string.IsNullOrEmpty(doc.FilePath))
                 return NotFound(new { message = "No file attached to this document." });
 
-            if (!System.IO.File.Exists(doc.FilePath))
-                return NotFound(new { message = "File not found on server." });
-
             var contentType = doc.FileType.ToLower() switch
             {
                 "pdf"  => "application/pdf",
@@ -350,7 +349,7 @@ namespace DmsApi.Controllers
                 _      => "application/octet-stream"
             };
 
-            var stream = System.IO.File.OpenRead(doc.FilePath);
+            var stream = await _seaweedFs.DownloadAsync(doc.FilePath);
             return File(stream, contentType, enableRangeProcessing: true);
         }
 
@@ -362,16 +361,12 @@ namespace DmsApi.Controllers
 
             if (attachment != null)
             {
-                // Save file to uploads folder
-                var uploadsDir = Path.Combine(AppContext.BaseDirectory, "uploads");
-                Directory.CreateDirectory(uploadsDir);
-                var fileName = $"{Guid.NewGuid()}_{Path.GetFileName(attachment.FileName)}";
-                filePath = Path.Combine(uploadsDir, fileName);
-                using (var stream = System.IO.File.Create(filePath))
-                    await attachment.CopyToAsync(stream);
+                using var ms = new MemoryStream();
+                await attachment.CopyToAsync(ms);
+                var bytes = ms.ToArray();
 
-                // Extract from the saved file — IFormFile stream is exhausted after CopyToAsync
-                extractedText = await _extractor.ExtractFromFileAsync(filePath);
+                extractedText = await _extractor.ExtractFromBytesAsync(bytes, Path.GetExtension(attachment.FileName));
+                filePath = await _seaweedFs.UploadAsync(bytes, attachment.FileName);
             }
 
             var document = new Document
@@ -415,11 +410,11 @@ namespace DmsApi.Controllers
                             ? src.ExtractedText[..Math.Min(300, src.ExtractedText.Length)]
                             : "(empty)",
                         contentLength = src.Content?.Length ?? 0,
-                        fileOnDisk = !string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath),
+                        fileInSeaweedFs = SeaweedFsService.IsFid(doc.FilePath),
                         filePath = doc.FilePath
                     });
                 }
-                return Ok(new { indexedInEs = false, fileOnDisk = !string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath), filePath = doc.FilePath });
+                return Ok(new { indexedInEs = false, fileInSeaweedFs = SeaweedFsService.IsFid(doc.FilePath), filePath = doc.FilePath });
             }
             catch (Exception ex)
             {
@@ -446,13 +441,25 @@ namespace DmsApi.Controllers
 
                 if (docs.Count == 0) break;
 
-                // Extract text from files that exist on disk
+                // Extract text from files stored in SeaweedFS
                 var models = new List<DocumentIndexModel>(docs.Count);
                 foreach (var doc in docs)
                 {
                     var extractedText = string.Empty;
-                    if (!string.IsNullOrEmpty(doc.FilePath) && System.IO.File.Exists(doc.FilePath))
-                        extractedText = await _extractor.ExtractFromFileAsync(doc.FilePath);
+                    if (SeaweedFsService.IsFid(doc.FilePath))
+                    {
+                        try
+                        {
+                            var stream = await _seaweedFs.DownloadAsync(doc.FilePath);
+                            using var ms = new MemoryStream();
+                            await stream.CopyToAsync(ms);
+                            extractedText = await _extractor.ExtractFromBytesAsync(ms.ToArray(), "." + doc.FileType);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning("Reindex: failed to download fid {Fid}: {Message}", doc.FilePath, ex.Message);
+                        }
+                    }
                     models.Add(ToIndexModel(doc, extractedText));
                 }
 

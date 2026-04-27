@@ -19,7 +19,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
-    && rm -rf /var/lib/apt/lists/*
+    libtesseract-dev \
+    libleptonica-dev \
+    libfontconfig1 \
+    libfreetype6 \
+    libgdiplus \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/lib/x86_64-linux-gnu/libleptonica.so /usr/lib/x86_64-linux-gnu/libleptonica-1.82.0.so
 
 COPY --from=build /app/publish .
 

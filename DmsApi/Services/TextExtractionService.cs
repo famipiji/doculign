@@ -1,54 +1,65 @@
-using Tesseract;
 using UglyToad.PdfPig;
 using DocumentFormat.OpenXml.Packaging;
 using PDFtoImage;
 using SkiaSharp;
+using System.Diagnostics;
 using System.Text;
 
 namespace DmsApi.Services
 {
     public class TextExtractionService
     {
-        private readonly string _tessDataPath;
         private readonly ILogger<TextExtractionService> _logger;
 
-        // If PdfPig extracts zero characters, assume scanned PDF and fall back to OCR
         private const int MinTextLayerLength = 0;
 
         public TextExtractionService(IConfiguration config, ILogger<TextExtractionService> logger)
         {
-            _tessDataPath = config["Tesseract:DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "tessdata");
             _logger = logger;
         }
 
-        public async Task<string> ExtractAsync(IFormFile file)
+        public async Task<string> ExtractFromBytesAsync(byte[] bytes, string extension)
         {
-            var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
-
-            using var ms = new MemoryStream();
-            await file.CopyToAsync(ms);
-            var bytes = ms.ToArray();
-
+            var ext = extension.ToLowerInvariant();
+            if (!ext.StartsWith('.')) ext = "." + ext;
             try
             {
                 return ext switch
                 {
-                    ".pdf"  => ExtractFromPdf(bytes),
+                    ".pdf"  => await ExtractFromPdfAsync(bytes),
                     ".docx" => ExtractFromDocx(bytes),
-                    ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tiff" or ".tif" => ExtractFromImage(bytes),
+                    ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tiff" or ".tif" => await ExtractFromImageCliAsync(bytes),
                     _ => string.Empty
                 };
             }
             catch (Exception ex)
             {
-                _logger.LogWarning("Text extraction failed for {FileName}: {Message}", file.FileName, ex.Message);
+                var inner = ex.InnerException ?? ex;
+                _logger.LogWarning("Text extraction failed for {Ext}: {Message} | Inner: {Inner}", ext, ex.Message, inner.Message);
                 return string.Empty;
             }
         }
 
-        private string ExtractFromPdf(byte[] bytes)
+        public async Task<string> ExtractAsync(IFormFile file)
         {
-            // Step 1: try embedded text layer via PdfPig
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms);
+            return await ExtractFromBytesAsync(ms.ToArray(), Path.GetExtension(file.FileName));
+        }
+
+        public async Task<string> ExtractFromFileAsync(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                _logger.LogWarning("ExtractFromFileAsync: file not found at {FilePath}", filePath);
+                return string.Empty;
+            }
+            var bytes = await File.ReadAllBytesAsync(filePath);
+            return await ExtractFromBytesAsync(bytes, Path.GetExtension(filePath));
+        }
+
+        private async Task<string> ExtractFromPdfAsync(byte[] bytes)
+        {
             var sb = new StringBuilder();
             using (var doc = PdfDocument.Open(bytes))
             {
@@ -60,30 +71,25 @@ namespace DmsApi.Services
                 }
             }
 
-            var textLayerContent = sb.ToString().Trim();
-            if (textLayerContent.Length > MinTextLayerLength)
-                return textLayerContent;
+            var textLayer = sb.ToString().Trim();
+            if (textLayer.Length > MinTextLayerLength)
+                return textLayer;
 
-            // Step 2: scanned/image PDF — render each page to image and OCR
             _logger.LogInformation("PDF has no text layer — running Tesseract OCR on rendered pages.");
-            return OcrPdfPages(bytes);
+            return await OcrPdfPagesAsync(bytes);
         }
 
-        private string OcrPdfPages(byte[] bytes)
+        private async Task<string> OcrPdfPagesAsync(byte[] bytes)
         {
             var sb = new StringBuilder();
-
-            // Render each page as a PNG image then OCR it
             var pageImages = Conversion.ToImages(bytes);
             foreach (var bitmap in pageImages)
             {
                 using var skBitmap = bitmap;
                 using var data = skBitmap.Encode(SKEncodedImageFormat.Png, 100);
-                var pngBytes = data.ToArray();
-
                 try
                 {
-                    var pageText = ExtractFromImage(pngBytes);
+                    var pageText = await ExtractFromImageCliAsync(data.ToArray());
                     if (!string.IsNullOrWhiteSpace(pageText))
                         sb.AppendLine(pageText);
                 }
@@ -92,8 +98,40 @@ namespace DmsApi.Services
                     _logger.LogWarning("OCR failed on a PDF page: {Message}", ex.Message);
                 }
             }
-
             return sb.ToString().Trim();
+        }
+
+        private async Task<string> ExtractFromImageCliAsync(byte[] bytes)
+        {
+            var tempFile = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.png");
+            try
+            {
+                await File.WriteAllBytesAsync(tempFile, bytes);
+
+                using var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "tesseract",
+                        Arguments = $"{tempFile} stdout -l eng",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                var text = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+
+                _logger.LogInformation("OCR extracted {Chars} chars from image", text.Trim().Length);
+                return text.Trim();
+            }
+            finally
+            {
+                try { File.Delete(tempFile); } catch { }
+            }
         }
 
         private string ExtractFromDocx(byte[] bytes)
@@ -101,50 +139,6 @@ namespace DmsApi.Services
             using var ms = new MemoryStream(bytes);
             using var doc = WordprocessingDocument.Open(ms, false);
             return doc.MainDocumentPart?.Document?.Body?.InnerText ?? string.Empty;
-        }
-
-        public async Task<string> ExtractFromFileAsync(string filePath)
-        {
-            if (!File.Exists(filePath))
-            {
-                _logger.LogWarning("ExtractFromFileAsync: file not found at {FilePath}", filePath);
-                return string.Empty;
-            }
-
-            var ext = Path.GetExtension(filePath).ToLowerInvariant();
-            var bytes = await File.ReadAllBytesAsync(filePath);
-
-            _logger.LogInformation("Extracting text from {Ext} file ({Bytes} bytes): {FilePath}", ext, bytes.Length, Path.GetFileName(filePath));
-
-            try
-            {
-                var result = ext switch
-                {
-                    ".pdf"  => ExtractFromPdf(bytes),
-                    ".docx" => ExtractFromDocx(bytes),
-                    ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tiff" or ".tif" => ExtractFromImage(bytes),
-                    _ => string.Empty
-                };
-
-                _logger.LogInformation("Extraction result: {Length} chars extracted from {FileName}", result.Length, Path.GetFileName(filePath));
-                return result;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Text extraction failed for {FilePath}", filePath);
-                return string.Empty;
-            }
-        }
-
-        private string ExtractFromImage(byte[] bytes)
-        {
-            if (!Directory.Exists(_tessDataPath))
-                throw new DirectoryNotFoundException($"Tesseract tessdata not found at: {_tessDataPath}");
-
-            using var engine = new TesseractEngine(_tessDataPath, "eng", EngineMode.Default);
-            using var img = Pix.LoadFromMemory(bytes);
-            using var page = engine.Process(img);
-            return page.GetText().Trim();
         }
     }
 }

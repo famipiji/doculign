@@ -18,6 +18,7 @@ builder.Services.AddSingleton(new ElasticsearchClient(elasticSettings));
 
 builder.Services.AddScoped<TextExtractionService>();
 builder.Services.AddScoped<SearchRepository>();
+builder.Services.AddHttpClient<SeaweedFsService>();
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
