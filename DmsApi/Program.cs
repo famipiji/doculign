@@ -16,7 +16,7 @@ var elasticSettings = new ElasticsearchClientSettings(new Uri(elasticUrl))
     .DefaultIndex("documents");
 builder.Services.AddSingleton(new ElasticsearchClient(elasticSettings));
 
-builder.Services.AddScoped<TextExtractionService>();
+builder.Services.AddHttpClient<TextExtractionService>();
 builder.Services.AddScoped<SearchRepository>();
 builder.Services.AddHttpClient<SeaweedFsService>();
 

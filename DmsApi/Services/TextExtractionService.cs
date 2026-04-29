@@ -10,12 +10,18 @@ namespace DmsApi.Services
     public class TextExtractionService
     {
         private readonly ILogger<TextExtractionService> _logger;
+        private readonly HttpClient _http;
+        private readonly string _ocrEngine;
+        private readonly string _paddleUrl;
 
         private const int MinTextLayerLength = 0;
 
-        public TextExtractionService(IConfiguration config, ILogger<TextExtractionService> logger)
+        public TextExtractionService(IConfiguration config, ILogger<TextExtractionService> logger, HttpClient http)
         {
             _logger = logger;
+            _http = http;
+            _ocrEngine = config["Ocr:Engine"] ?? "Tesseract";
+            _paddleUrl = (config["Ocr:PaddleUrl"] ?? "http://paddleocr:8000").TrimEnd('/');
         }
 
         public async Task<string> ExtractFromBytesAsync(byte[] bytes, string extension)
@@ -28,7 +34,7 @@ namespace DmsApi.Services
                 {
                     ".pdf"  => await ExtractFromPdfAsync(bytes),
                     ".docx" => ExtractFromDocx(bytes),
-                    ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tiff" or ".tif" => await ExtractFromImageCliAsync(bytes),
+                    ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tiff" or ".tif" => await ExtractFromImageAsync(bytes),
                     _ => string.Empty
                 };
             }
@@ -58,6 +64,12 @@ namespace DmsApi.Services
             return await ExtractFromBytesAsync(bytes, Path.GetExtension(filePath));
         }
 
+        // Routes to the configured OCR engine
+        private Task<string> ExtractFromImageAsync(byte[] bytes) =>
+            _ocrEngine.Equals("PaddleOCR", StringComparison.OrdinalIgnoreCase)
+                ? ExtractFromImagePaddleAsync(bytes)
+                : ExtractFromImageCliAsync(bytes);
+
         private async Task<string> ExtractFromPdfAsync(byte[] bytes)
         {
             var sb = new StringBuilder();
@@ -75,7 +87,7 @@ namespace DmsApi.Services
             if (textLayer.Length > MinTextLayerLength)
                 return textLayer;
 
-            _logger.LogInformation("PDF has no text layer — running Tesseract OCR on rendered pages.");
+            _logger.LogInformation("PDF has no text layer — running {Engine} OCR on rendered pages.", _ocrEngine);
             return await OcrPdfPagesAsync(bytes);
         }
 
@@ -89,7 +101,7 @@ namespace DmsApi.Services
                 using var data = skBitmap.Encode(SKEncodedImageFormat.Png, 100);
                 try
                 {
-                    var pageText = await ExtractFromImageCliAsync(data.ToArray());
+                    var pageText = await ExtractFromImageAsync(data.ToArray());
                     if (!string.IsNullOrWhiteSpace(pageText))
                         sb.AppendLine(pageText);
                 }
@@ -99,6 +111,37 @@ namespace DmsApi.Services
                 }
             }
             return sb.ToString().Trim();
+        }
+
+        private async Task<string> ExtractFromImagePaddleAsync(byte[] bytes)
+        {
+            using var content = new MultipartFormDataContent();
+            using var fileContent = new ByteArrayContent(bytes);
+            fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png");
+            content.Add(fileContent, "file", "image.png");
+
+            HttpResponseMessage response;
+            try
+            {
+                response = await _http.PostAsync($"{_paddleUrl}/ocr", content);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("PaddleOCR service unreachable: {Message}", ex.Message);
+                return string.Empty;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStringAsync();
+                _logger.LogWarning("PaddleOCR returned {Status}: {Body}", response.StatusCode, body);
+                return string.Empty;
+            }
+
+            var json = await response.Content.ReadFromJsonAsync<PaddleOcrResult>();
+            var text = json?.Text?.Trim() ?? string.Empty;
+            _logger.LogInformation("PaddleOCR extracted {Chars} chars from image", text.Length);
+            return text;
         }
 
         private async Task<string> ExtractFromImageCliAsync(byte[] bytes)
@@ -125,7 +168,7 @@ namespace DmsApi.Services
                 var text = await process.StandardOutput.ReadToEndAsync();
                 await process.WaitForExitAsync();
 
-                _logger.LogInformation("OCR extracted {Chars} chars from image", text.Trim().Length);
+                _logger.LogInformation("Tesseract OCR extracted {Chars} chars from image", text.Trim().Length);
                 return text.Trim();
             }
             finally
@@ -134,11 +177,13 @@ namespace DmsApi.Services
             }
         }
 
-        private string ExtractFromDocx(byte[] bytes)
+        private static string ExtractFromDocx(byte[] bytes)
         {
             using var ms = new MemoryStream(bytes);
             using var doc = WordprocessingDocument.Open(ms, false);
             return doc.MainDocumentPart?.Document?.Body?.InnerText ?? string.Empty;
         }
+
+        private sealed record PaddleOcrResult(string Text);
     }
 }
