@@ -52,6 +52,12 @@ services:
     restart: unless-stopped
     volumes:
       - paddleocr_models:/root/.paddleocr
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
 
   api:
     build:
@@ -60,10 +66,16 @@ services:
     ports:
       - "5000:8080"
     depends_on:
-      - db
-      - elasticsearch
-      - seaweedfs-master
-      - seaweedfs-volume
+      db:
+        condition: service_started
+      elasticsearch:
+        condition: service_started
+      seaweedfs-master:
+        condition: service_started
+      seaweedfs-volume:
+        condition: service_started
+      paddleocr:
+        condition: service_healthy
     environment:
       ConnectionStrings__DefaultConnection: "Host=db;Database=dms_db;Username=postgres;Password=Q@simbu5uk;"
       Elasticsearch__Url: "http://elasticsearch:9200"

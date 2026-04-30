@@ -172,6 +172,9 @@ export const CreateRecordForm: React.FC<CreateRecordFormProps> = ({ onClose, onS
     const anyOk = results.some(r => r.ok);
 
     if (allOk) {
+      setTitle('');
+      setFiles([]);
+      setDynamicFields({ invoiceNumber: '', date: '', amount: '', fullName: '', department: '', hireDate: '', candidateName: '', position: '' });
       onSuccess();
     } else if (!anyOk) {
       setError('All uploads failed. Check API connection.');
@@ -229,6 +232,7 @@ export const CreateRecordForm: React.FC<CreateRecordFormProps> = ({ onClose, onS
             <input
               type="text"
               required
+              autoComplete="off"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="e.g. INV-2026-001"

@@ -57,6 +57,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [formKey, setFormKey] = useState(0);
 
   const mockDocuments: Document[] = [
     { id: 1, name: 'Contract_2024_Q3_FINAL.pdf', author: 'James Chen', fileSizeBytes: 2048000, fileType: 'PDF', updatedAt: new Date(Date.now() - 2 * 3600000).toISOString() },
@@ -105,7 +106,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
             
             <div className="h-8 w-px bg-border mx-2" />
             <button
-              onClick={() => setShowCreateForm(true)}
+              onClick={() => { setShowCreateForm(true); setFormKey(k => k + 1); }}
               className="flex items-center gap-2 px-3 py-1.5 bg-primary text-white rounded-lg text-sm font-semibold hover:bg-primary-dark transition-all">
               <Plus size={16} />
               <span>New Document</span>
@@ -117,6 +118,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, onLogout }) => {
         <div className="flex-1 overflow-y-auto p-8">
           {showCreateForm && (
             <CreateRecordForm
+              key={formKey}
               onClose={() => setShowCreateForm(false)}
               onSuccess={() => { setShowCreateForm(false); fetchData(); }}
             />

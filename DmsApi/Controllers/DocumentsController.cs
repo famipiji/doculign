@@ -366,7 +366,15 @@ namespace DmsApi.Controllers
                 var bytes = ms.ToArray();
 
                 extractedText = await _extractor.ExtractFromBytesAsync(bytes, Path.GetExtension(attachment.FileName));
-                filePath = await _seaweedFs.UploadAsync(bytes, attachment.FileName);
+
+                try
+                {
+                    filePath = await _seaweedFs.UploadAsync(bytes, attachment.FileName);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "SeaweedFS upload failed for {FileName} — saving document without file", attachment.FileName);
+                }
             }
 
             var document = new Document

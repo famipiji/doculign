@@ -9,15 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libgomp1 \
     libgl1 \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
-
-# Pre-download PP-OCRv3 models at build time
-RUN python -c "from paddleocr import PaddleOCR; PaddleOCR(use_doc_orientation_classify=False, use_doc_unwarping=False, use_textline_orientation=False, lang='en')"
 
 EXPOSE 8000
 
